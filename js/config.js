@@ -7,6 +7,8 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 export const supabaseUrl = SUPABASE_URL;
 export const supabaseKey = SUPABASE_ANON_KEY;
 
+export const RAWG_API_KEY = '545d12ebff47427884e845df333d251f';
+
 export const APP_CONFIG = {
   maxReviewLength: 800,
   maxFavoriteGames: 4,
