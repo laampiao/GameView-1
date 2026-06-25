@@ -1,7 +1,7 @@
-import { stars, imgUrl, trunc, nowDate, formatDate, openModal, closeModal, showToast } from './ui.js';
-import { getReviews, createReview, getComments, createComment, toggleReviewReaction, supabaseQuery, searchAPI } from './api.js';
+import { stars, imgUrl, trunc, formatDate, openModal, closeModal, showToast } from './ui.js';
+import { getReviews, createReview, getComments, createComment, supabaseQuery, searchAPI } from './api.js';
 import { getCurrentUser, requireAuth } from './auth.js';
-import { APP_CONFIG } from './config.js';
+import { APP_CONFIG, supabase } from './config.js';
 
 let activeGenre = null;
 let allReviews = [];
@@ -29,7 +29,7 @@ export function makeReviewCard(rv) {
 
   const gameName = rv.games?.title || rv.gameName || 'Jogo';
   const gameCover = rv.games?.cover_url || rv.gameCover || '';
-  const authorName = rv.profiles?.display_name || rv.author?.name || 'An\u00f4nimo';
+  const authorName = rv.profiles?.display_name || rv.author?.name || 'Anônimo';
   const authorAvatar = rv.profiles?.avatar_url || rv.author?.avatar || '';
   const score = rv.score || rv.rating || 0;
   const excerpt = rv.body || rv.excerpt || '';
@@ -76,10 +76,8 @@ export function renderReviews(containerId, list, isFiltered = false) {
   if (!list.length) {
     const msg = isFiltered
       ? 'Nenhuma resenha encontrada para este filtro.'
-      : 'Ainda não há resenhas. Seja o primeiro a publicar! \u270D\uFE0F';
-    el.innerHTML = `<div class="empty-state">
-      <strong>${msg}</strong>
-    </div>`;
+      : 'Ainda não há resenhas. Seja o primeiro a publicar! ✍️';
+    el.innerHTML = `<div class="empty-state"><strong>${msg}</strong></div>`;
     return;
   }
   list.forEach(rv => el.appendChild(makeReviewCard(rv)));
@@ -124,7 +122,7 @@ export async function renderTrending() {
       <img class="trending-cover" src="${rv.games?.cover_url || ''}" alt="${rv.games?.title || ''}">
       <div>
         <div class="trending-name">${rv.games?.title || ''}</div>
-        <div class="trending-score">\u2605 ${(rv.score / 2).toFixed(1)}</div>
+        <div class="trending-score">★ ${(rv.score / 2).toFixed(1)}</div>
       </div>
     `;
     el.appendChild(d);
@@ -141,7 +139,6 @@ export function initWriteReview() {
   document.getElementById('wm-game-search')?.addEventListener('input', handleGameSearch);
   document.getElementById('wm-sel-clear')?.addEventListener('click', clearSelectedGame);
   document.getElementById('wm-textarea')?.addEventListener('input', handleCharCount);
-
   buildStarPicker(0);
 }
 
@@ -158,7 +155,7 @@ function openWriteReviewModal() {
   document.getElementById('wm-textarea').value = '';
   document.getElementById('wm-char-counter').textContent = '800';
   document.getElementById('btn-wm-save').disabled = true;
-  document.getElementById('star-display-label').textContent = '\u2014';
+  document.getElementById('star-display-label').textContent = '—';
 
   openModal('write-review-modal-overlay');
 }
@@ -172,7 +169,7 @@ function buildStarPicker(currentRating) {
     const starEl = document.createElement('span');
     starEl.className = 'star-picker-star';
     starEl.dataset.value = star;
-    starEl.textContent = '\u2605';
+    starEl.textContent = '★';
     if (currentRating >= star) starEl.classList.add('filled');
     else if (currentRating >= star - 0.5) starEl.classList.add('half');
 
@@ -192,7 +189,7 @@ function buildStarPicker(currentRating) {
       writeState.rating = value;
       highlightStars(value);
       starEl.setAttribute('aria-valuenow', value.toString());
-      document.getElementById('star-display-label').textContent = `${value} \u2605`;
+      document.getElementById('star-display-label').textContent = `${value} ★`;
       document.querySelectorAll('.wm-error').forEach(el => el.remove());
       validateWriteForm();
     });
@@ -201,15 +198,13 @@ function buildStarPicker(currentRating) {
         e.preventDefault();
         writeState.rating = Math.min(5, writeState.rating + 0.5);
         highlightStars(writeState.rating);
-        starEl.setAttribute('aria-valuenow', writeState.rating.toString());
-        document.getElementById('star-display-label').textContent = `${writeState.rating} \u2605`;
+        document.getElementById('star-display-label').textContent = `${writeState.rating} ★`;
         validateWriteForm();
       } else if (e.key === 'ArrowLeft' && writeState.rating > 0.5) {
         e.preventDefault();
         writeState.rating = Math.max(0.5, writeState.rating - 0.5);
         highlightStars(writeState.rating);
-        starEl.setAttribute('aria-valuenow', writeState.rating.toString());
-        document.getElementById('star-display-label').textContent = `${writeState.rating} \u2605`;
+        document.getElementById('star-display-label').textContent = `${writeState.rating} ★`;
         validateWriteForm();
       }
     });
@@ -304,7 +299,7 @@ function validateWriteForm() {
 }
 
 function showWriteError(field, message) {
-  clearWriteErrors(field);
+  clearWriteErrors();
   const errorEl = document.createElement('div');
   errorEl.className = 'wm-error';
   errorEl.textContent = message;
@@ -317,23 +312,16 @@ function showWriteError(field, message) {
   }
 }
 
-function clearWriteErrors(field) {
-  if (field) {
-    document.querySelectorAll(`.wm-error`).forEach((el, i, arr) => {
-      if (!field || el.previousElementSibling?.classList?.contains(
-        field === 'game' ? 'wm-game-selector' :
-        field === 'rating' ? 'star-picker' :
-        'wm-textarea-wrap'
-      )) el.remove();
-    });
-  } else {
-    document.querySelectorAll('.wm-error').forEach(el => el.remove());
-  }
+function clearWriteErrors() {
+  document.querySelectorAll('.wm-error').forEach(el => el.remove());
 }
 
 async function publishReview() {
   const user = getCurrentUser();
-  if (!user) return;
+  if (!user) {
+    showToast('Faça login para publicar uma resenha.');
+    return openModal('auth-modal-overlay');
+  }
 
   clearWriteErrors();
 
@@ -343,46 +331,68 @@ async function publishReview() {
 
   let hasError = false;
   if (!game) {
-    showWriteError('game', 'Selecione um jogo');
+    showWriteError('game', 'Selecione um jogo.');
     hasError = true;
   }
   if (!rating) {
-    showWriteError('rating', 'Dê uma nota ao jogo');
+    showWriteError('rating', 'Dê uma nota ao jogo.');
     hasError = true;
   }
   if (!text || text.length < 20) {
-    showWriteError('text', 'Escreva sua resenha (mínimo 20 caracteres)');
+    showWriteError('text', 'Escreva sua resenha (mínimo 20 caracteres).');
     hasError = true;
   }
   if (hasError) return;
 
-  const reviewData = {
-    user_id: user.id,
-    game_id: game.id,
-    game_title: game.name,
-    score: rating * 2,
-    body: text,
-    recommended: true,
-    created_at: new Date().toISOString(),
-  };
+  const saveBtn = document.getElementById('btn-wm-save');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Publicando...';
 
   try {
+    // Upsert do jogo na tabela games antes de criar a resenha
+    const { data: upsertedGame, error: gameError } = await supabase
+      .from('games')
+      .upsert({
+        rawg_id: game.id,
+        title: game.name,
+        cover_url: game.background_image || '',
+        release_date: game.released || null,
+      }, { onConflict: 'rawg_id' })
+      .select('id')
+      .single();
+
+    if (gameError) throw gameError;
+
+    const reviewData = {
+      user_id: user.id,
+      game_id: upsertedGame.id,
+      score: rating * 2,
+      body: text,
+      recommended: true,
+      created_at: new Date().toISOString(),
+    };
+
     await createReview(reviewData);
     closeModal('write-review-modal-overlay');
-    showToast('Resenha publicada!');
+    showToast('Resenha publicada com sucesso! 🎮');
     const reviews = await loadReviews();
     renderReviews('review-list', reviews);
   } catch (err) {
-    showToast('Erro ao publicar: ' + translateReviewError(err.message));
+    showToast(translateReviewError(err.message || ''));
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Publicar Resenha';
   }
 }
 
 function translateReviewError(message) {
   if (message.includes('duplicate') || message.includes('already exists')) return 'Você já publicou uma resenha para este jogo.';
-  if (message.includes('foreign key') || message.includes('game_id')) return 'Jogo não encontrado.';
+  if (message.includes('foreign key') || message.includes('game_id')) return 'Jogo não encontrado no banco de dados.';
   if (message.includes('unauthorized') || message.includes('auth')) return 'Sessão expirada. Faça login novamente.';
   return 'Erro ao publicar. Tente novamente.';
 }
+
+export { getReviews };
 
 // Review Modal (read)
 export async function openReview(id) {
@@ -436,12 +446,12 @@ export async function openReview(id) {
           Curtir (${rv.likes_count || 0})
         </button>
       </div>
-      <div class="comments-head">${comments.length} Coment\u00e1rio${comments.length !== 1 ? 's' : ''}</div>
+      <div class="comments-head">${comments.length} Comentário${comments.length !== 1 ? 's' : ''}</div>
       <div class="comment-input-row">
         ${avHtml}
         <div class="comment-input-wrap">
           <textarea class="comment-input" id="comment-ta-${rv.id}"
-            placeholder="${user ? 'Adicione um coment\u00e1rio...' : 'Fa\u00e7a login para comentar...'}"></textarea>
+            placeholder="${user ? 'Adicione um comentário...' : 'Faça login para comentar...'}"></textarea>
           <button class="btn-post-comment" data-action="post-comment" data-review-id="${rv.id}">Comentar</button>
         </div>
       </div>
@@ -467,7 +477,7 @@ export async function postComment(id) {
 
   if (comment) {
     ta.value = '';
-    showToast('Coment\u00e1rio publicado!');
+    showToast('Comentário publicado!');
     openReview(id);
   }
 }
